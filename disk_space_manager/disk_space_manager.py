@@ -50,7 +50,7 @@ import os
 import struct
 from typing import Callable
 
-from results import PageResult, WriteResult, AllocResult
+from results import PageResult, WriteResult, AllocResult, OpResult, FAILURE
 
 
 # --- File header (physical page 0) constants ------------------------------
@@ -86,14 +86,14 @@ class DiskSpaceManager:
         self.log_write: Callable[[WriteResult], None] = lambda wr: None
 
         # Cache of open file handles, keyed by file_id (relation name +
-        # optional ".idx" suffix). Opening once per file avoids OS overhead.
+        # optional ".hidx"/".bidx" suffix). Opening once per file avoids OS overhead.
         self._handles = {}
 
     # ----- path / handle helpers ----------------------------------------
     def _path(self, file_id: str) -> str:
-        """Map a logical file_id (e.g. 'house', 'house.idx') to a real path."""
+        """Map a logical file_id (e.g. 'house', 'house.bidx') to a real path."""
         # We append '.dat' when the caller did not specify an extension, so
-        # 'house' -> 'house.dat' but 'house.idx' stays as 'house.idx'.
+        # 'house' -> 'house.dat' but 'house.bidx' stays as 'house.bidx'.
         name = file_id if "." in file_id else file_id + ".dat"
         return os.path.join(self.data_dir, name)
 
@@ -121,7 +121,7 @@ class DiskSpaceManager:
         return data
 
     def _write_physical_page(self, file_id: str, phys_page: int,
-                             data: bytes) -> bytes:
+                             data: bytes, result_page_id: int = None) -> bytes:
         """Write one physical page. Counts as one disk write.
 
         Returns the *previous* contents of the page (or zero bytes if the page
@@ -149,6 +149,14 @@ class DiskSpaceManager:
         f.write(data)
         f.flush()
         self.write_count += 1
+        wr = WriteResult(
+            success=True,
+            file_id=file_id,
+            page_id=phys_page if result_page_id is None else result_page_id,
+            old_data=old,
+            new_data=data,
+        )
+        self.log_write(wr)
         return old
 
     # ----- file header (page 0) read/write ------------------------------
@@ -188,25 +196,29 @@ class DiskSpaceManager:
         self._write_physical_page(file_id, 0, bytes(buf))
 
     # ----- public API ---------------------------------------------------
-    def file_exists(self, file_id: str) -> bool:
-        """True if the file already exists on disk."""
-        return os.path.exists(self._path(file_id))
+    def file_exists(self, file_id: str) -> OpResult:
+        """Return whether the file already exists on disk."""
+        return OpResult(success=True, value=os.path.exists(self._path(file_id)))
 
-    def create_file(self, file_id: str) -> None:
+    def create_file(self, file_id: str) -> OpResult:
         """Create a new, empty DSM-managed file (writes the header page).
 
-        If the file already exists, raises FileExistsError -- upper layers
-        should check first and surface a friendly failure via OpResult.
+        If the file already exists, returns a failure Result.
         """
         path = self._path(file_id)
         if os.path.exists(path):
-            raise FileExistsError(file_id)
+            return OpResult(
+                success=False,
+                status=FAILURE,
+                error_msg=f"file already exists: {file_id!r}",
+            )
         # touch then open r+b
         with open(path, "wb") as f:
             f.write(b"")
         self._handles[file_id] = open(path, "r+b")
         # initialize: 0 content pages, empty free list
         self._write_header(file_id, 0, [])
+        return OpResult(success=True)
 
     def allocate_page(self, file_id: str) -> AllocResult:
         """Allocate a new logical page in `file_id`.
@@ -224,7 +236,10 @@ class DiskSpaceManager:
             num_content += 1
             phys = logical + 1
             # Materialize the new page on disk as zero-filled.
-            self._write_physical_page(file_id, phys, b"\x00" * self.page_size)
+            self._write_physical_page(
+                file_id, phys, b"\x00" * self.page_size,
+                result_page_id=logical,
+            )
             self._write_header(file_id, num_content, free_list)
         return AllocResult(success=True, file_id=file_id, page_id=logical)
 
@@ -242,7 +257,9 @@ class DiskSpaceManager:
     def write_page(self, file_id: str, page_id: int, data: bytes) -> WriteResult:
         """Write one logical page to `file_id`. Fires log_write."""
         phys = page_id + 1
-        old = self._write_physical_page(file_id, phys, data)
+        old = self._write_physical_page(
+            file_id, phys, data, result_page_id=page_id
+        )
         wr = WriteResult(
             success=True,
             file_id=file_id,
@@ -250,21 +267,24 @@ class DiskSpaceManager:
             old_data=old,
             new_data=data,
         )
-        # Spec 4.1: log_write is invoked on every write.
-        self.log_write(wr)
         return wr
 
-    def deallocate_page(self, file_id: str, page_id: int) -> None:
+    def deallocate_page(self, file_id: str, page_id: int) -> OpResult:
         """Return a logical page to the free list."""
         num_content, free_list = self._read_header(file_id)
         if page_id in free_list:
-            return  # already free; idempotent
+            return OpResult(success=True)  # already free; idempotent
         if page_id < 0 or page_id >= num_content:
-            raise ValueError(f"page {page_id} out of range for {file_id!r}")
+            return OpResult(
+                success=False,
+                status=FAILURE,
+                error_msg=f"page {page_id} out of range for {file_id!r}",
+            )
         free_list.append(page_id)
         self._write_header(file_id, num_content, free_list)
+        return OpResult(success=True)
 
-    def num_pages(self, file_id: str) -> int:
+    def num_pages(self, file_id: str) -> OpResult:
         """Return the number of LOGICAL content pages in `file_id`.
 
         Note: includes pages currently on the free list (they are 'allocated'
@@ -272,7 +292,7 @@ class DiskSpaceManager:
         0..num_pages-1 and skip empty ones via their own bitmap.
         """
         num_content, _ = self._read_header(file_id)
-        return num_content
+        return OpResult(success=True, value=num_content)
 
     def stats_reset(self) -> None:
         """Zero the I/O counters (spec: `stats reset` command)."""
@@ -288,7 +308,7 @@ class DiskSpaceManager:
                 pass
         self._handles.clear()
 
-    def delete_file(self, file_id: str) -> None:
+    def delete_file(self, file_id: str) -> OpResult:
         """Remove a DSM-managed file from disk. Closes the handle if open.
         Idempotent: silently no-op if the file does not exist."""
         if file_id in self._handles:
@@ -300,3 +320,4 @@ class DiskSpaceManager:
         path = self._path(file_id)
         if os.path.exists(path):
             os.remove(path)
+        return OpResult(success=True)

@@ -208,6 +208,28 @@ class BufferManager:
         # Return a BufferResult so the caller still sees eviction info.
         return bres
 
+    # ----- DSM metadata / allocation wrappers -------------------------
+    # Layer 3 still needs file lifecycle and page-count services, but it
+    # reaches them through this layer so every inter-layer call returns a
+    # Result object and the DiskSpaceManager remains behind the buffer.
+    def file_exists(self, file_id: str):
+        return self.disk.file_exists(file_id)
+
+    def create_file(self, file_id: str):
+        return self.disk.create_file(file_id)
+
+    def delete_file(self, file_id: str):
+        return self.disk.delete_file(file_id)
+
+    def allocate_page(self, file_id: str):
+        return self.disk.allocate_page(file_id)
+
+    def deallocate_page(self, file_id: str, page_id: int):
+        return self.disk.deallocate_page(file_id, page_id)
+
+    def num_pages(self, file_id: str):
+        return self.disk.num_pages(file_id)
+
     def flush(self) -> None:
         """Write every dirty page back to disk and clear dirty flags.
 

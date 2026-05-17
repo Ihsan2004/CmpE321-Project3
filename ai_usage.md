@@ -30,9 +30,10 @@ For each step we did the same loop:
   with explicit trade-offs.
 - **Write the code.** Claude drafted code at our direction, and we read,
   questioned, and edited it before it went into the project.
-- **Write tests first / alongside.** Every layer has its own standalone test
-  script (`test_dsm.py`, `test_bm.py`, `test_4a..d.py`, `test_5.py`). Failing
-  tests caused us to revisit the design rather than patch around the bug.
+- **Write checks first / alongside.** We used small layer-focused check scripts
+  while developing and kept the reproducible experiment runner in the final
+  submission. Failing checks caused us to revisit the design rather than patch
+  around the bug.
 
 ## Concrete examples of things we asked Claude
 
@@ -84,4 +85,4 @@ For each step we did the same loop:
 All design rationale lives in `DESIGN.md`, and step-by-step experiment
 commands live in `record.txt`. Anyone with the same `config.json`,
 `workload_generator.py` seed, and engine source should reproduce our
-experiment numbers byte-for-byte.
+experiment numbers.

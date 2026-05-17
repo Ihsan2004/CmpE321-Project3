@@ -136,6 +136,7 @@ class OpResult:
     with success=False and status=FAILURE, NOT as a crash.
     """
     success: bool
+    value: Any = None                  # optional metadata for non-row ops
     pages_accessed: int = 0
     index_nodes_visited: int = 0
     status: str = SUCCESS

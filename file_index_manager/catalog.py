@@ -53,10 +53,11 @@ class Catalog:
         Idempotent: calling on a fresh engine creates an empty page; calling
         when catalog.dat already exists reads and decodes it.
         """
-        if not self.disk.file_exists(CATALOG_FILE):
+        exists = self.buffer.file_exists(CATALOG_FILE)
+        if not exists.value:
             # First boot: create the file and reserve a catalog page.
-            self.disk.create_file(CATALOG_FILE)
-            self.disk.allocate_page(CATALOG_FILE)
+            self.buffer.create_file(CATALOG_FILE)
+            self.buffer.allocate_page(CATALOG_FILE)
             # Write an empty header (num_types = 0).
             self._persist()
         else:

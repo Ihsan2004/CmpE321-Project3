@@ -128,10 +128,11 @@ Relation files are created lazily when a `create type` command runs.
 
 The catalog is a normal paged file (`catalog.dat`) accessed *through* the
 Buffer Manager like everything else. For each type it records: type name,
-field count, each field's name + type, the 1-indexed primary-key position,
-and bookkeeping such as the root page of the type's index. Because it is just
-another paged file, it persists across runs for free — satisfying the
-persistence requirement (spec section 15).
+field count, each field's name + type, and the 1-indexed primary-key
+position. Index roots live in their own index files (`<type>.hidx` or
+`<type>.bidx`) and are rebuilt from data on startup when an indexed strategy
+is active. Because the catalog is just another paged file, it persists across
+runs for free — satisfying the persistence requirement (spec section 15).
 
 ---
 

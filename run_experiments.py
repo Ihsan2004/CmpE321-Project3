@@ -8,7 +8,7 @@ Run from the project root:
     python3 run_experiments.py
 
 This script writes the same files archive.py writes (output.txt, log.csv,
-stats_output.txt, *.dat, *.idx) and cleans them up between runs.
+stats_output.txt, *.dat, *.hidx, *.bidx) and cleans them up between runs.
 """
 
 import json
@@ -203,8 +203,8 @@ def experiment_3() -> str:
     out_lines.append(
         "Workload: random, 500 records, 200 queries. Index: bplus_tree, LRU.\n"
     )
-    out_lines.append("| Buffer Size | I/Os | Hit Rate |")
-    out_lines.append("|-------------|------|----------|")
+    out_lines.append("| Buffer Size | I/Os  | Hit Rate |")
+    out_lines.append("|-------------|-------|----------|")
     base_cfg = {
         "page_size": 4096, "max_records_per_page": 10,
         "replacement_policy": "LRU", "index_strategy": "bplus_tree",
@@ -215,7 +215,7 @@ def experiment_3() -> str:
         cfg = {**base_cfg, "buffer_pool_size": size}
         s = run_one(cfg, wl)
         out_lines.append(
-            f"| {size:>11d} | {total_io(s):>4d} | {s['hit_rate']:>7.1f}% |"
+            f"| {size:>11d} | {total_io(s):>5d} | {s['hit_rate']:>7.1f}% |"
         )
     return "\n".join(out_lines) + "\n"
 

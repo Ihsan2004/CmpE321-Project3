@@ -343,8 +343,12 @@ class QueryProcessor:
             est = self._estimate_lookup(strategy, type_name)
         elif inner_tokens[:1] == ["range_search"] and len(inner_tokens) >= 5:
             type_name = inner_tokens[1]
+            field_name = inner_tokens[2]
             # hash_index falls back to heap_scan on range queries (spec 7.2).
             if strategy == "hash_index":
+                strategy = "heap_scan (fallback)"
+            elif strategy == "bplus_tree" and not self._range_uses_btree(
+                    type_name, field_name):
                 strategy = "heap_scan (fallback)"
             est = self._estimate_range(strategy, type_name)
         else:
@@ -355,7 +359,7 @@ class QueryProcessor:
     def _estimate_lookup(self, strategy: str, type_name: str) -> int:
         # Try to read the page count for a meaningful estimate.
         try:
-            n_pages = self.disk.num_pages(type_name)
+            n_pages = self.buffer.num_pages(type_name).value
         except Exception:
             n_pages = 1
         if strategy == "heap_scan":
@@ -367,13 +371,28 @@ class QueryProcessor:
 
     def _estimate_range(self, strategy: str, type_name: str) -> int:
         try:
-            n_pages = self.disk.num_pages(type_name)
+            n_pages = self.buffer.num_pages(type_name).value
         except Exception:
             n_pages = 1
         if strategy.startswith("heap_scan"):
             return max(1, n_pages)
         # bplus_tree range: tree walk + leaf chain + matched data pages
         return max(2, n_pages // 2 + 2)
+
+    def _range_uses_btree(self, type_name: str, field_name: str) -> bool:
+        """True iff Layer 3 will take the B+ tree range fast path."""
+        try:
+            catalog = self.file_idx.catalog
+            if not catalog.has_type(type_name):
+                return False
+            schema = catalog.get_schema(type_name)
+            field_idx = schema.field_index(field_name)
+            return (
+                field_idx == schema.primary_key_index
+                and schema.primary_key_field[1] == "int"
+            )
+        except Exception:
+            return False
 
     # ==================================================================
     # Snapshot / delta for explain

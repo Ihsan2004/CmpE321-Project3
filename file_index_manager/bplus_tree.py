@@ -114,12 +114,13 @@ class BPlusTree:
     # ==================================================================
     def build(self) -> None:
         """Create the .bidx file with an empty tree (no root yet)."""
-        if not self.disk.file_exists(self.file_id):
-            self.disk.create_file(self.file_id)
+        if not self.buffer.file_exists(self.file_id).value:
+            self.buffer.create_file(self.file_id)
         # logical page 0 = tree header
-        self.disk.allocate_page(self.file_id)
+        self.buffer.allocate_page(self.file_id)
         buf = bytearray(self.page_size)
         struct.pack_into(_TREE_HDR_FMT, buf, 0, -1, 0)
+        self.nodes_visited += 1
         self.buffer.write_page(self.file_id, 0, bytes(buf))
 
     def rebuild_from_data(self, iter_records_with_loc) -> None:
@@ -150,6 +151,7 @@ class BPlusTree:
         try:
             buf = bytearray(bres.page.data)
             struct.pack_into(_TREE_HDR_FMT, buf, 0, root_pid, height)
+            self.nodes_visited += 1
             self.buffer.write_page(self.file_id, 0, bytes(buf))
         finally:
             self.buffer.unpin(self.file_id, 0, dirty=True)
@@ -162,7 +164,7 @@ class BPlusTree:
         empty body; for internals we leave it to the caller, because the
         invariant "n keys, n+1 children" makes a truly empty internal node
         invalid."""
-        alloc = self.disk.allocate_page(self.file_id)
+        alloc = self.buffer.allocate_page(self.file_id)
         if kind == _KIND_LEAF:
             self._write_node(alloc.page_id, _KIND_LEAF, [], [], aux=aux)
         # internal nodes are written by the caller right after allocation
@@ -192,6 +194,7 @@ class BPlusTree:
         For internals: keys are the n separators; payloads are the n+1
         children, so payloads has length len(keys) + 1.
         """
+        self.nodes_visited += 1
         buf = bytearray(self.page_size)
         if kind == _KIND_LEAF:
             count = len(keys)

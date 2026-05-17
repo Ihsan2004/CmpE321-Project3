@@ -42,9 +42,9 @@ class FileIndexManager:
     def __init__(self, config: dict, buffer):
         self.config = config
         self.buffer = buffer
-        # Convenience: the DiskSpaceManager sits below the buffer. We use it
-        # ONLY for non-page metadata (file_exists, create_file, num_pages).
-        # Real page traffic still goes through the buffer.
+        # Convenience for statistics ownership and legacy constructor shape.
+        # Layer-3 file lifecycle and metadata calls go through BufferManager
+        # wrappers so inter-layer traffic still returns Result objects.
         self.disk = buffer.disk
         self.page_size = config["page_size"]
         self.max_records_per_page = config["max_records_per_page"]
@@ -85,7 +85,7 @@ class FileIndexManager:
             # so the engine can still start. Subsequent operations on this
             # type will surface as 'failure' via QueryProcessor's exception
             # handler instead of crashing bootstrap.
-            if not self.disk.file_exists(schema.name):
+            if not self._file_exists(schema.name):
                 continue
             idx = self._make_index(schema)
             if idx is None:
@@ -94,8 +94,8 @@ class FileIndexManager:
             # from the data file. Cost is O(N) at startup; negligible for
             # our workloads and guarantees correctness across strategy
             # switches.
-            if self.disk.file_exists(idx.file_id):
-                self.disk.delete_file(idx.file_id)
+            if self._file_exists(idx.file_id):
+                self.buffer.delete_file(idx.file_id)
             idx.rebuild_from_data(self._iter_locations(schema))
             self._indexes[type_name] = idx
 
@@ -114,7 +114,7 @@ class FileIndexManager:
         """Yield (pk_value, page_id, slot_id) for every record of `schema`
         currently on disk. Used by rebuild_from_data."""
         pk_idx = schema.primary_key_index
-        for page_id in range(self.disk.num_pages(schema.name)):
+        for page_id in range(self._num_pages(schema.name)):
             _, page = self._read_data_page(schema.name, page_id)
             try:
                 for slot, rec in P.iter_records(
@@ -133,8 +133,8 @@ class FileIndexManager:
     def _ensure_data_file(self, type_name: str) -> None:
         """Make sure the .dat file exists. Called when a type is created."""
         fid = self._data_file(type_name)
-        if not self.disk.file_exists(fid):
-            self.disk.create_file(fid)
+        if not self._file_exists(fid):
+            self.buffer.create_file(fid)
 
     def _read_data_page(self, type_name: str, page_id: int):
         """Pin and fetch a data page through the buffer. Returns (BufferResult,
@@ -156,7 +156,7 @@ class FileIndexManager:
         Returns the new logical page id. We immediately overwrite the page
         with an empty header so a later read sees a consistent state.
         """
-        alloc = self.disk.allocate_page(self._data_file(type_name))
+        alloc = self.buffer.allocate_page(self._data_file(type_name))
         empty = P.empty_page(alloc.page_id, self.page_size)
         # Persist the empty header via the buffer so the dirty bit / cache
         # behave consistently with everything else.
@@ -164,7 +164,17 @@ class FileIndexManager:
         return alloc.page_id
 
     def _data_page_count(self, type_name: str) -> int:
-        return self.disk.num_pages(self._data_file(type_name))
+        return self._num_pages(self._data_file(type_name))
+
+    def _file_exists(self, file_id: str) -> bool:
+        res = self.buffer.file_exists(file_id)
+        return bool(res.value) if res.success else False
+
+    def _num_pages(self, file_id: str) -> int:
+        res = self.buffer.num_pages(file_id)
+        if not res.success:
+            return 0
+        return int(res.value)
 
     # ------------------------------------------------------------------
     # CREATE TYPE

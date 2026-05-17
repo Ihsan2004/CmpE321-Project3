@@ -126,10 +126,10 @@ class HashIndex:
     # ------------------------------------------------------------------
     def build(self) -> None:
         """Initialise an empty index file (called on `create type`)."""
-        if not self.disk.file_exists(self.file_id):
-            self.disk.create_file(self.file_id)
+        if not self.buffer.file_exists(self.file_id).value:
+            self.buffer.create_file(self.file_id)
         # logical page 0 = directory
-        self.disk.allocate_page(self.file_id)
+        self.buffer.allocate_page(self.file_id)
         empty_dir = bytearray(self.page_size)
         # all -1
         for i in range(NUM_BUCKETS):
@@ -159,6 +159,7 @@ class HashIndex:
             buf = bytearray(bres.page.data)
             struct.pack_into(_DIR_ENTRY_FMT, buf,
                              bucket * _DIR_ENTRY_SIZE, page_id)
+            self.nodes_visited += 1
             self.buffer.write_page(self.file_id, 0, bytes(buf))
         finally:
             # write_page handles pinning internally; unpin one extra (the
@@ -177,13 +178,14 @@ class HashIndex:
 
     def _write_bucket_page(self, page_id: int, count: int, nxt: int,
                            entries_blob: bytes) -> None:
+        self.nodes_visited += 1
         buf = bytearray(self.page_size)
         struct.pack_into(_BHDR_FMT, buf, 0, page_id, count, nxt)
         buf[_BHDR_SIZE:_BHDR_SIZE + len(entries_blob)] = entries_blob
         self.buffer.write_page(self.file_id, page_id, bytes(buf))
 
     def _alloc_bucket_page(self, next_page_id: int = -1) -> int:
-        alloc = self.disk.allocate_page(self.file_id)
+        alloc = self.buffer.allocate_page(self.file_id)
         # immediately write a valid empty header
         self._write_bucket_page(alloc.page_id, 0, next_page_id, b"")
         return alloc.page_id
