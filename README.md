@@ -1,5 +1,17 @@
 # Modular DBMS Engine — CMPE 321 Project 3
 
+**Group 7** — Beratcan Doğan (2021400132), Faik İhsan Südüpak (2022400084).
+
+Authorship note. We wrote this project together as a single pair-programming
+effort over screen-share, with both members reading and editing every change
+before it landed in our working tree. The repository on GitHub shows a single
+initial push because we only pushed once the project was complete; the joint
+authorship and per-member breakdown of contributions is documented in
+`2021400132_Contribution.pdf` and `2022400084_Contribution.pdf`, with the
+broader workflow described in `ai_usage.md`.
+
+---
+
 A modular, four-layer database engine in pure Python. Every layer is a black
 box that talks to its neighbours only through `Result` objects (see
 `results.py`). Configuration flips one line in `config.json` and the engine
