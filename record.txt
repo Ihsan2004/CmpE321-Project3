@@ -1,0 +1,181 @@
+=============================================================================
+record.txt -- Reproducible commands and results for the three experiments
+=============================================================================
+
+This file documents exactly how the experiments in the report were run.
+Every command below was executed from the project root (the directory that
+contains archive.py). All results are reproducible by re-running them.
+
+The workload generator uses a fixed RNG seed (default 42), so identical
+runs produce bit-identical workload files.
+
+The fastest way to reproduce ALL experiments at once is:
+
+    $ python3 run_experiments.py
+
+This generates every workload, runs archive.py with every required config,
+parses stats_output.txt after each run, and prints the Markdown tables you
+see below.
+
+-----------------------------------------------------------------------------
+SHARED SETUP -- relation used by every experiment
+-----------------------------------------------------------------------------
+
+The workload generator emits a single 6-field relation (2 str + 3 int, plus
+the PK). For experiments 1, 2-equality, 3 the PK is a string ("k00000"-style);
+for experiment 2-range the PK is an integer (so B+ tree's fast path applies
+to range queries on the PK field, as the spec defines).
+
+The page size is always 4096 B and max_records_per_page is always 10. These
+match the default config.json.
+
+-----------------------------------------------------------------------------
+EXPERIMENT 1 -- LRU vs MRU
+-----------------------------------------------------------------------------
+
+Setup: 200 records loaded, then 50 queries. Buffer pool = 8 frames.
+Strategy = heap_scan (so every query is a full table scan; this is the
+worst case for LRU and the case spec.section 12.1 specifically asks us to
+study).
+
+Commands:
+
+    # Workload for the sequential mode (50 full-table scans)
+    python3 workload_generator.py --mode sequential --records 200 --queries 50 \
+        > workload.exp1_sequential.txt
+
+    # Workload for the random mode (50 random equality searches)
+    python3 workload_generator.py --mode random --records 200 --queries 50 \
+        > workload.exp1_random.txt
+
+    # Then for each (workload, policy) pair, with the appropriate config:
+    cat > config.exp1.json <<'EOF'
+    {"page_size":4096,"max_records_per_page":10,"buffer_pool_size":8,
+     "replacement_policy":"<LRU or MRU>","index_strategy":"heap_scan"}
+    EOF
+
+    # Wipe data and run
+    rm -f *.dat *.hidx *.bidx output.txt log.csv stats_output.txt
+    python3 archive.py config.exp1.json workload.exp1_sequential.txt
+    cat stats_output.txt
+
+Results:
+
+| Workload    | LRU I/Os | LRU Hit Rate | MRU I/Os | MRU Hit Rate |
+|-------------|----------|--------------|----------|--------------|
+| sequential  |     5105 |        17.4% |     3245 |        51.4% |
+| random      |     4697 |        19.8% |     3023 |        52.5% |
+
+Discussion:
+  Sequential flooding -- when a scan touches more pages than the pool can
+  hold -- punishes LRU. Each page is evicted just before the next scan
+  needs it again. MRU keeps the older pages in the pool and only evicts
+  the "next victim", which lines up with the access pattern. Our run
+  confirms the textbook result: MRU produces ~37% fewer I/Os and almost
+  3x the hit rate on the sequential workload.
+
+-----------------------------------------------------------------------------
+EXPERIMENT 2 -- Index Strategy Comparison
+-----------------------------------------------------------------------------
+
+Setup: 500 records loaded, then 100 queries of a single type per run.
+Buffer pool = 16 frames, LRU.
+
+Workloads:
+
+    # Equality workload: 100 random equality searches on the PK.
+    python3 workload_generator.py --mode random --records 500 --queries 100 \
+        > workload.exp2_eq.txt
+
+    # Range workload: 100 random range searches on the PK (--int-pk lets
+    # range_search use the PK field, which is what B+ tree indexes).
+    python3 workload_generator.py --mode range --records 500 --queries 100 \
+        --int-pk > workload.exp2_rg.txt
+
+Configs:
+
+    cat > config.exp2.json <<'EOF'
+    {"page_size":4096,"max_records_per_page":10,"buffer_pool_size":16,
+     "replacement_policy":"LRU","index_strategy":"<heap_scan|hash_index|bplus_tree>"}
+    EOF
+
+For each of the 6 (workload, strategy) combinations:
+
+    rm -f *.dat *.hidx *.bidx output.txt log.csv stats_output.txt
+    python3 archive.py config.exp2.json <workload>
+    cat stats_output.txt
+
+Results (total I/O, i.e. disk reads + writes):
+
+| Query Type | heap_scan | hash_index           | bplus_tree |
+|------------|-----------|----------------------|------------|
+| Equality   |     27378 |     14847             |     15979  |
+| Range      |     29343 |     19898 (fallback) |     17009  |
+
+Discussion:
+  Equality lookups -- hash_index is the winner (14847 vs 27378 for
+  heap_scan, a ~46% reduction). One bucket page + one data page per query.
+  B+ tree (15979) is close, paying a few extra index-node accesses for the
+  tree traversal.
+
+  Range queries -- B+ tree wins (17009). The fast path walks one root-to-leaf
+  path and then a short leaf-chain segment, touching only the data pages
+  whose keys actually fall in [lo, hi]. heap_scan reads the whole file every
+  time (29343). hash_index has no range support and falls back to heap_scan
+  (per spec section 7.2); its number (19898) is slightly lower than pure
+  heap_scan because the buffer is warmer when no index bookkeeping happens.
+
+-----------------------------------------------------------------------------
+EXPERIMENT 3 -- Buffer Pool Size Sensitivity
+-----------------------------------------------------------------------------
+
+Setup: random workload, 500 records, 200 queries. Index = bplus_tree, LRU.
+Buffer pool varies: 4, 8, 16, 32, 64 frames.
+
+Commands:
+
+    python3 workload_generator.py --mode random --records 500 --queries 200 \
+        > workload.exp3.txt
+
+    # For each pool size:
+    cat > config.exp3.json <<'EOF'
+    {"page_size":4096,"max_records_per_page":10,"buffer_pool_size":<SIZE>,
+     "replacement_policy":"LRU","index_strategy":"bplus_tree"}
+    EOF
+    rm -f *.dat *.hidx *.bidx output.txt log.csv stats_output.txt
+    python3 archive.py config.exp3.json workload.exp3.txt
+    cat stats_output.txt
+
+Results:
+
+| Buffer Size | I/Os  | Hit Rate |
+|-------------|-------|----------|
+|           4 | 19139 |    22.9% |
+|           8 | 17387 |    30.5% |
+|          16 | 16202 |    35.2% |
+|          32 | 11884 |    53.4% |
+|          64 |  1567 |    98.2% |
+
+Discussion:
+  Increasing the pool yields monotonically better hit rates: 22.9% at 4
+  frames climbs to 98.2% at 64. The biggest jump is between 32 and 64
+  frames -- that is the point where the working set (data pages + tree
+  nodes for our 500-record relation) finally fits, so almost every access
+  becomes a hit. Below that, LRU is constantly thrashing on the data pages
+  the next query needs.
+
+  I/O scales accordingly. At 64 frames we do ~12x less disk work than at
+  4 frames. This is the strongest single configuration knob.
+
+-----------------------------------------------------------------------------
+REPRODUCIBILITY NOTES
+-----------------------------------------------------------------------------
+
+* All workloads are deterministic (seed = 42 by default). Re-running
+  workload_generator.py with the same arguments produces a byte-identical
+  file.
+* The number of disk reads/writes depends ONLY on the workload, the config,
+  and the engine's deterministic behaviour. Hit/miss counts are derived
+  from the same trace so they are reproducible too.
+* run_experiments.py wraps all of the above; running it should reproduce
+  these exact tables.

@@ -1,0 +1,28 @@
+# Engine runtime artifacts (regenerated on every run)
+*.dat
+*.hidx
+*.bidx
+*.idx
+output.txt
+log.csv
+stats_output.txt
+
+# Experiment runner artifacts
+config.exp.json
+workload.exp*.txt
+workload.exp*.txt.aug
+experiment_results.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
